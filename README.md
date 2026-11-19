@@ -1,41 +1,27 @@
-# DailyOS — Personal Accountability & Project Tracker
+# DailyOS - Personal Accountability & Project Tracker
 
 Aplikasi web modern yang dirancang khusus untuk mahasiswa dan developer independen: melacak tugas kuliah, mengelola personal project, serta menjaga akuntabilitas harian (Sholat 5 Waktu, 100 Menit Deep Work, 100 Menit Belajar Kuliah, dan Habit Kustom).
 
 ---
 
-## ✨ Fitur Utama
+## Fitur
 
-1. **Daily Accountability & Rutinitas Wajib**:
-   - 🕌 **Sholat 5 Waktu** (Subuh, Dzuhur, Ashar, Maghrib, Isya) dengan indikator visual dan animasi perayaan saat tuntas.
-   - ⚡ **100 Menit Deep Work Tracker**: Target fokus harian dengan tombol quick-add (+15m, +30m, +50m) dan live timer.
-   - 🎓 **100 Menit Belajar Kuliah**: Target belajar mandiri harian.
-   - ✨ **Custom Habits**: Tambah kebiasaan fleksibel (Baca Qur'an/Buku, Olahraga, Minum 2L air, Tidur teratur).
-   - 🔥 **Streak & Consistency Heatmap**: Tracker konsistensi 35 hari terakhir bergaya GitHub commit heatmap.
+**Tantangan 100 hari.** Tanggal mulai diatur sendiri, counter hari berjalan, dan hitungan miss. Hari sempurna = 5/5 sholat + target Deep Work + target Belajar Kuliah + semua habit aktif. Kurang sedikit pun dihitung miss. Hari berganti pukul 00:00 WIB, bukan tengah malam perangkat.
 
-2. **Tugas Kuliah & Akademik**:
-   - Filter mata kuliah, prioritas (Penting, Sedang, Rendah), dan status (To Do, In Progress, Submitted).
-   - Pengingat deadline otomatis (Hari ini, Besok, sisa hari, atau Terlewat).
-   - Catatan tugas & link referensi materi/dokumen.
+**Kalender konsistensi.** Satu sel per hari, warnanya skor hari itu dari merah ke hijau. Hari lampau tanpa data tetap merah karena itu memang miss. Border amber menandai hari yang lewat target. Titik kecil menandai deadline. Klik tanggal untuk membuka lognya.
 
-3. **Personal Projects**:
-   - Kelola project pribadi, portofolio, atau ide startup.
-   - Checklist milestone / subtask dengan progress bar otomatis.
-   - Status project (Planning, Active, Completed, On Hold).
+**Log sesi kerja.** Setiap sesi, baik dari timer maupun dicatat manual, wajib disertai catatan apa yang dikerjakan. Tanpa catatan menitnya tidak masuk. Total menit harian adalah jumlah sesi, bukan angka yang ditambah-tambah, sehingga dua perangkat bisa mencatat bersamaan tanpa saling menimpa.
 
-4. **Focus Timer (Pomodoro & Stopwatch Terintegrasi)**:
-   - Mode Deep Work atau Belajar Kuliah.
-   - Preset durasi: 15m, 25m (Pomodoro), 45m, 50m, 100m.
-   - Suara chime / alarm sintetis Web Audio API tanpa perlu file eksternal.
-   - Otomatis mencatat menit sesi ke log hari ini saat selesai.
+**Tugas dan project dalam satu daftar.** Satu entitas dengan deadline opsional dan subtask opsional. Urut deadline terdekat, warna tepi kiri mengikuti urgensi.
 
-5. **Akses Single-User & Sinkronisasi HP / Laptop**:
-   - 🔒 **PIN Lock Pribadi**: Lindungi data Anda dengan 4-6 digit keypad PIN.
-   - ☁️ **Supabase Cloud Sync (Gratis)**: Sinkronisasi instan realtime antar perangkat (buka di HP dan Laptop secara bersamaan, data otomatis sinkron).
-   - 💾 **Local-First & Offline**: Tetap bisa digunakan offline lewat localStorage.
-   - 📦 **Ekspor & Impor JSON**: Cadangkan seluruh data kapan saja ke file JSON.
+**Habit.** Definisi berlaku setiap hari, centangnya per hari. Menghapus habit berarti mengarsipkan, jadi skor hari lampau tidak ikut berubah.
 
----
+**Kunci edit.** Hanya hari ini dan kemarin yang bisa diubah. Lebih lama dari itu terkunci.
+
+**Sinkronisasi.** Supabase realtime antara HP dan laptop, satu baris JSONB. Merge per hari dan per item, dengan tombstone untuk penghapusan. PIN dan kunci Supabase tidak pernah ikut terkirim ke cloud. Tetap jalan offline lewat localStorage.
+
+**Lainnya.** PIN lock, QR magic link untuk menyambungkan HP, ekspor dan impor JSON.
+
 
 ## 🚀 Cara Menjalankan di Laptop
 

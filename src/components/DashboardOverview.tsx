@@ -1,459 +1,356 @@
-import React from 'react';
-import { 
-  Flame, 
-  GraduationCap, 
-  Sparkles, 
-  ArrowRight, 
-  TrendingUp,
-  Check
+import React, { useMemo, useState } from 'react';
+import {
+  CalendarClock,
+  ChevronRight,
+  Flame,
+  GraduationCap,
+  Play,
+  Plus,
+  Target,
+  Zap,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import type { AppState, ActiveTab, DailyLog, PrayerName } from '../types';
-import { calculateAccountabilityScore } from '../services/storage';
+import type { AppState, PrayerName, Task, WorkMode } from '../types';
+import {
+  CHALLENGE_LENGTH,
+  createEmptyDailyLog,
+  daysBetween,
+  getDayStats,
+  isEditableDate,
+  PRAYERS,
+} from '../services/storage';
 import { playChimeSound } from '../services/audio';
+import { Calendar } from './Calendar';
+import { DayPanel } from './DayPanel';
 
-interface DashboardOverviewProps {
+interface Props {
   state: AppState;
+  tasks: Task[];
+  todayKey: string;
   selectedDate: string;
-  onNavigateTab: (tab: ActiveTab) => void;
-  onUpdateLog: (updatedLog: DailyLog) => void;
+  onSelectDate: (key: string) => void;
   streak: number;
+  misses: number;
+  dayNumber: number;
+  onTogglePrayer: (dateKey: string, prayer: PrayerName) => void;
+  onToggleHabit: (dateKey: string, habitId: string) => void;
+  onAddHabit: (name: string, icon: string) => void;
+  onArchiveHabit: (habitId: string) => void;
+  onDeleteSession: (dateKey: string, sessionId: string) => void;
+  onSaveNotes: (dateKey: string, notes: string) => void;
+  onQuickStart: (mode: WorkMode) => void;
+  onLogManual: (mode: WorkMode) => void;
+  onOpenTasks: () => void;
+  onSetChallengeStart: (dateKey: string) => void;
 }
 
-const PRAYERS_LIST: { id: PrayerName; label: string; desc: string; icon: string }[] = [
-  { id: 'subuh', label: 'Subuh', desc: 'Fajar', icon: '🌅' },
-  { id: 'dzuhur', label: 'Dzuhur', desc: 'Siang', icon: '☀️' },
-  { id: 'ashar', label: 'Ashar', desc: 'Sore', icon: '🌤️' },
-  { id: 'maghrib', label: 'Maghrib', desc: 'Maghrib', icon: '🌇' },
-  { id: 'isya', label: 'Isya', desc: 'Malam', icon: '🌌' },
-];
-
-export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
-  state,
-  selectedDate,
-  onNavigateTab,
-  onUpdateLog,
-  streak,
-}) => {
-  const currentLog = state.dailyLogs[selectedDate] || {
-    date: selectedDate,
-    prayers: { subuh: false, dzuhur: false, ashar: false, maghrib: false, isya: false },
-    deepWorkMinutes: 0,
-    collegeStudyMinutes: 0,
-    customHabits: {},
-    updatedAt: '',
+/** Makin dekat deadline, makin panas warnanya. */
+function urgency(daysLeft: number) {
+  if (daysLeft < 0)
+    return { ring: 'border-rose-500/60 bg-rose-500/10', text: 'text-rose-300', label: 'Terlewat' };
+  if (daysLeft === 0)
+    return { ring: 'border-rose-500/50 bg-rose-500/10', text: 'text-rose-300', label: 'Hari ini' };
+  if (daysLeft === 1)
+    return { ring: 'border-orange-500/50 bg-orange-500/10', text: 'text-orange-300', label: 'Besok' };
+  if (daysLeft <= 3)
+    return {
+      ring: 'border-amber-500/40 bg-amber-500/10',
+      text: 'text-amber-300',
+      label: `${daysLeft} hari lagi`,
+    };
+  if (daysLeft <= 7)
+    return {
+      ring: 'border-sky-500/35 bg-sky-500/10',
+      text: 'text-sky-300',
+      label: `${daysLeft} hari lagi`,
+    };
+  return {
+    ring: 'border-slate-700/60 bg-slate-800/30',
+    text: 'text-slate-400',
+    label: `${daysLeft} hari lagi`,
   };
+}
 
-  const deepWorkTarget = state.settings.deepWorkDailyTarget || 100;
+export const DashboardOverview: React.FC<Props> = (props) => {
+  const {
+    state,
+    tasks,
+    todayKey,
+    selectedDate,
+    onSelectDate,
+    streak,
+    misses,
+    dayNumber,
+    onTogglePrayer,
+    onQuickStart,
+    onLogManual,
+    onOpenTasks,
+    onSetChallengeStart,
+  } = props;
+  const [editStart, setEditStart] = useState(false);
+
+  const todayLog = state.dailyLogs[todayKey] || createEmptyDailyLog(todayKey);
+  const deepTarget = state.settings.deepWorkDailyTarget || 100;
   const collegeTarget = state.settings.collegeDailyTarget || 100;
-  const habitCount = state.habitDefinitions.length;
+  const stats = getDayStats(todayLog, state.habitDefinitions, todayKey, deepTarget, collegeTarget);
 
-  const score = calculateAccountabilityScore(currentLog, habitCount, deepWorkTarget, collegeTarget);
-  const prayersDone = Object.values(currentLog.prayers).filter(Boolean).length;
+  const upcoming = useMemo(
+    () =>
+      tasks
+        .filter((t) => t.status !== 'done' && t.dueDate)
+        .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''))
+        .slice(0, 6),
+    [tasks]
+  );
 
-  // Toggle Prayer directly from Overview
-  const handleTogglePrayer = (prayerId: PrayerName) => {
-    const nextVal = !currentLog.prayers[prayerId];
-    const newPrayers = { ...currentLog.prayers, [prayerId]: nextVal };
-    
-    const allDone = Object.values(newPrayers).filter(Boolean).length === 5;
-    if (nextVal && allDone) {
-      confetti({
-        particleCount: 80,
-        spread: 60,
-        origin: { y: 0.7 },
-      });
-      playChimeSound('complete');
-    } else if (nextVal) {
+  const handlePrayer = (p: PrayerName) => {
+    const willBeDone = !todayLog.prayers?.[p];
+    onTogglePrayer(todayKey, p);
+    if (willBeDone && stats.prayersDone === 4) {
+      confetti({ particleCount: 80, spread: 60, origin: { y: 0.7 } });
       playChimeSound('complete');
     }
-
-    onUpdateLog({
-      ...currentLog,
-      prayers: newPrayers,
-      updatedAt: new Date().toISOString(),
-    });
   };
 
-  const urgentTasks = state.collegeTasks
-    .filter((t) => t.status !== 'submitted')
-    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-    .slice(0, 3);
-
-  const activeProjects = state.projects
-    .filter((p) => p.status === 'in_progress')
-    .slice(0, 3);
-
-  const getPast35Days = () => {
-    const days: { dateStr: string; label: string; score: number }[] = [];
-    const now = new Date();
-    for (let i = 34; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(d.getDate() - i);
-      const str = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const log = state.dailyLogs[str];
-      const sc = log ? calculateAccountabilityScore(log, habitCount, deepWorkTarget, collegeTarget) : 0;
-      days.push({
-        dateStr: str,
-        label: d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }),
-        score: sc,
-      });
-    }
-    return days;
-  };
-
-  const heatmapDays = getPast35Days();
-
-  // Authentic GitHub commit green ramp
-  const getHeatmapColor = (sc: number) => {
-    if (sc === 0) return 'bg-slate-800/80 border border-slate-700/50 text-slate-500';
-    if (sc <= 25) return 'bg-[#0e4429] border border-[#006d32]/40 text-emerald-300';
-    if (sc <= 50) return 'bg-[#006d32] border border-[#26a641]/40 text-emerald-100';
-    if (sc <= 75) return 'bg-[#26a641] text-slate-950 font-bold shadow-sm shadow-[#26a641]/25';
-    return 'bg-[#39d353] text-slate-950 font-extrabold shadow-md shadow-[#39d353]/35';
-  };
+  const workCards: { mode: WorkMode; label: string; icon: React.ReactNode; mins: number; target: number }[] = [
+    {
+      mode: 'deepWork',
+      label: 'Deep Work',
+      icon: <Zap className="w-4 h-4" />,
+      mins: stats.deepWorkMinutes,
+      target: deepTarget,
+    },
+    {
+      mode: 'college',
+      label: 'Belajar Kuliah',
+      icon: <GraduationCap className="w-4 h-4" />,
+      mins: stats.collegeMinutes,
+      target: collegeTarget,
+    },
+  ];
 
   return (
-    <div className="space-y-6 pb-20 relative z-10">
-      {/* Hero Accountability Banner */}
-      <div className="relative overflow-hidden rounded-3xl bg-slate-900/80 backdrop-blur-md border border-indigo-500/30 p-6 sm:p-8 shadow-2xl">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-2">
-            <div className="flex items-center space-x-2">
-              <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                Pusat Kontrol & Akuntabilitas
-              </span>
-              <span className="text-xs text-slate-400">
-                {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-              </span>
-            </div>
-
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-              {score >= 90
-                ? 'Luar biasa! Target hari ini tercapai sempurna 🔥'
-                : score >= 60
-                ? 'Bagus sekali! Lanjutkan sisa target hari ini 💪'
-                : 'Fokus dan mulailah langkah pertamamu hari ini 🚀'}
-            </h1>
-
-            <p className="text-xs sm:text-sm text-slate-300 max-w-xl">
-              Sholat 5 waktu terjaga, alokasikan 100 menit deep work & 100 menit tugas kuliah untuk kemajuan konsisten setiap hari.
-            </p>
+    <div className="space-y-4 pb-24">
+      {/* Status 100 hari */}
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        {editStart ? (
+          <input
+            type="date"
+            autoFocus
+            value={state.challengeStartDate}
+            max={todayKey}
+            onChange={(e) => onSetChallengeStart(e.target.value)}
+            onBlur={() => setEditStart(false)}
+            className="bg-slate-900 border border-indigo-500 rounded-xl px-3 py-2 text-xs text-white outline-none"
+          />
+        ) : (
+          <button
+            onClick={() => setEditStart(true)}
+            title="Klik untuk mengubah tanggal mulai tantangan 100 hari"
+            className="flex items-center gap-2 bg-slate-900/90 border border-slate-800 hover:border-indigo-500/50 rounded-xl px-3 py-2"
+          >
+            <Target className="w-4 h-4 text-indigo-400" />
+            <span className="text-xs font-bold text-white">
+              Hari {Math.max(1, dayNumber)} <span className="text-slate-500">/ {CHALLENGE_LENGTH}</span>
+            </span>
+          </button>
+        )}
+        <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-800 rounded-xl px-3 py-2">
+          <Flame className="w-4 h-4 text-amber-400" />
+          <span className="text-xs font-bold text-white">{streak} hari sempurna</span>
+        </div>
+        <div
+          className={`flex items-center gap-2 border rounded-xl px-3 py-2 ${
+            misses > 0 ? 'bg-rose-500/10 border-rose-500/30' : 'bg-slate-900/90 border-slate-800'
+          }`}
+        >
+          <span className={`text-xs font-bold ${misses > 0 ? 'text-rose-300' : 'text-emerald-400'}`}>
+            {misses} miss
+          </span>
+        </div>
+        <div className="flex-1" />
+        <div className="text-right">
+          <div
+            className={`text-xl font-black leading-none ${
+              stats.perfect ? 'text-emerald-400' : 'text-white'
+            }`}
+          >
+            {stats.score}%
           </div>
-
-          {/* Big Score Dial / Card */}
-          <div className="flex items-center space-x-4 bg-slate-950/70 border border-slate-800/80 rounded-2xl p-4 shrink-0 shadow-lg">
-            <div className="relative w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center">
-              <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                <path
-                  className="text-slate-800"
-                  strokeWidth="3.5"
-                  stroke="currentColor"
-                  fill="none"
-                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                />
-                <path
-                  className={`${score >= 80 ? 'text-[#39d353]' : 'text-indigo-500'} transition-all duration-700`}
-                  strokeDasharray={`${score}, 100`}
-                  strokeWidth="3.5"
-                  strokeLinecap="round"
-                  stroke="currentColor"
-                  fill="none"
-                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                />
-              </svg>
-              <div className="absolute font-mono font-black text-lg sm:text-xl text-white">
-                {score}%
-              </div>
-            </div>
-
-            <div>
-              <div className="text-xs font-bold text-white uppercase tracking-wider">Accountability</div>
-              <div className="text-[11px] text-slate-400 mt-0.5">
-                {prayersDone}/5 Sholat • {currentLog.deepWorkMinutes}m Deep Work • {currentLog.collegeStudyMinutes}m Kuliah
-              </div>
-              <div className="flex items-center space-x-1 text-amber-400 text-xs font-semibold mt-1">
-                <Flame className="w-3.5 h-3.5 fill-amber-400" />
-                <span>Streak: {streak} Hari Konsisten</span>
-              </div>
-            </div>
-          </div>
+          <div className="text-[10px] text-slate-500">skor hari ini</div>
         </div>
       </div>
 
-      {/* Interactive 5 Waktu Sholat Section (Bisa Langsung Dicentang di Overview) */}
-      <div className="bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-lg">
-              🕌
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h3 className="font-bold text-white text-base">Sholat 5 Waktu</h3>
-                <span className="text-[10px] font-semibold text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">
-                  Bisa dicentang langsung
-                </span>
-              </div>
-              <p className="text-xs text-slate-400">Tunaikan tepat waktu & perbarui status harian Anda</p>
-            </div>
-          </div>
-          <div className={`px-3 py-1 rounded-full text-xs font-bold border transition ${
-            prayersDone === 5
-              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-              : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-          }`}>
-            {prayersDone} / 5 Selesai
-          </div>
-        </div>
+      {/* 1. DEADLINE — paling atas, paling penting */}
+      <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5">
+        <header className="flex items-center justify-between mb-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+            <CalendarClock className="w-4 h-4 text-amber-400" />
+            Deadline Terdekat
+          </h2>
+          <button
+            onClick={onOpenTasks}
+            className="flex items-center gap-0.5 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300"
+          >
+            Semua tugas <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        </header>
 
-        {/* 5 Prayers Grid Interactive */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {PRAYERS_LIST.map((p) => {
-            const isDone = !!currentLog.prayers[p.id];
+        {upcoming.length === 0 ? (
+          <button
+            onClick={onOpenTasks}
+            className="w-full py-6 text-center text-xs text-slate-500 hover:text-slate-300 border border-dashed border-slate-700 rounded-xl"
+          >
+            Belum ada deadline. Klik untuk menambah tugas.
+          </button>
+        ) : (
+          <ul className="space-y-2">
+            {upcoming.map((t) => {
+              const left = daysBetween(todayKey, t.dueDate!);
+              const u = urgency(left);
+              const doneSub = t.subtasks.filter((s) => s.completed).length;
+              return (
+                <li key={t.id}>
+                  <button
+                    onClick={onOpenTasks}
+                    className={`w-full flex items-center gap-3 border rounded-xl px-3 py-2.5 text-left transition hover:brightness-110 ${u.ring}`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-white truncate">{t.title}</p>
+                      <p className="text-[11px] text-slate-400 truncate">
+                        {t.course || (t.kind === 'project' ? 'Project' : 'Tugas')}
+                        {t.subtasks.length > 0 && ` · ${doneSub}/${t.subtasks.length} subtask`}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className={`text-xs font-bold ${u.text}`}>{u.label}</div>
+                      <div className="text-[10px] text-slate-500">{t.dueDate}</div>
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      {/* 2. SHOLAT hari ini */}
+      <section className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5">
+        <header className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold text-white">Sholat 5 Waktu</h2>
+          <span
+            className={`text-xs font-bold ${
+              stats.prayersDone === 5 ? 'text-emerald-400' : 'text-slate-400'
+            }`}
+          >
+            {stats.prayersDone}/5
+          </span>
+        </header>
+        <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
+          {PRAYERS.map((p) => {
+            const done = !!todayLog.prayers?.[p.id];
             return (
               <button
                 key={p.id}
-                type="button"
-                onClick={() => handleTogglePrayer(p.id)}
-                className={`p-3.5 rounded-2xl border transition-all text-left flex flex-col justify-between h-28 relative group overflow-hidden active:scale-95 ${
-                  isDone
-                    ? 'bg-gradient-to-b from-emerald-950/40 to-slate-900 border-emerald-500/40 text-white shadow-lg shadow-emerald-950/30'
-                    : 'bg-slate-950/60 border-slate-800/90 text-slate-300 hover:border-slate-700 hover:bg-slate-800/50'
+                onClick={() => handlePrayer(p.id)}
+                className={`py-3 rounded-xl border transition active:scale-95 ${
+                  done
+                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                    : 'bg-slate-800/40 border-slate-700/50 text-slate-500 hover:border-slate-600'
                 }`}
               >
-                <div className="flex items-start justify-between w-full">
-                  <span className="text-xl">{p.icon}</span>
-                  <div className={`w-6 h-6 rounded-lg flex items-center justify-center transition ${
-                    isDone
-                      ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/40'
-                      : 'border border-slate-700 bg-slate-900 text-slate-600 group-hover:border-slate-500'
-                  }`}>
-                    <Check className={`w-3.5 h-3.5 ${isDone ? 'opacity-100' : 'opacity-0'}`} />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="font-bold text-sm text-white group-hover:text-indigo-300 transition">
-                    {p.label}
-                  </div>
-                  <div className="text-[10px] text-slate-400">
-                    {isDone ? 'Sudah Ditunaikan' : p.desc}
-                  </div>
-                </div>
+                <div className="text-lg leading-none">{p.icon}</div>
+                <div className="text-[10px] font-semibold mt-1.5">{p.label}</div>
               </button>
             );
           })}
         </div>
+      </section>
+
+      {/* 3. KALENDER + LOG */}
+      <div className="grid lg:grid-cols-2 gap-4 items-start">
+        <Calendar
+          state={state}
+          tasks={tasks}
+          todayKey={todayKey}
+          selectedDate={selectedDate}
+          onSelectDate={onSelectDate}
+        />
+        <DayPanel
+          state={state}
+          dateKey={selectedDate}
+          todayKey={todayKey}
+          tasks={tasks}
+          hidePrayers={selectedDate === todayKey}
+          onTogglePrayer={props.onTogglePrayer}
+          onToggleHabit={props.onToggleHabit}
+          onAddHabit={props.onAddHabit}
+          onArchiveHabit={props.onArchiveHabit}
+          onDeleteSession={props.onDeleteSession}
+          onSaveNotes={props.onSaveNotes}
+          onLogManual={props.onLogManual}
+        />
       </div>
 
-      {/* 2 Focus Metric Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* Deep Work Card */}
-        <div
-          onClick={() => onNavigateTab('daily')}
-          className="bg-slate-900/80 backdrop-blur-md border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-4 cursor-pointer transition shadow-lg group"
-        >
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-2xl">⚡</span>
-            <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
-              currentLog.deepWorkMinutes >= deepWorkTarget ? 'bg-emerald-500/10 text-emerald-400' : 'bg-indigo-500/10 text-indigo-300'
-            }`}>
-              {currentLog.deepWorkMinutes}/{deepWorkTarget}m
-            </span>
-          </div>
-          <div className="font-bold text-white text-sm group-hover:text-indigo-300 transition">
-            100 Menit Deep Work
-          </div>
-          <p className="text-[11px] text-slate-400 mt-0.5">
-            {currentLog.deepWorkMinutes >= deepWorkTarget ? 'Target tercapai!' : `Kurang ${Math.max(0, deepWorkTarget - currentLog.deepWorkMinutes)} menit lagi`}
-          </p>
-        </div>
-
-        {/* College Study Card */}
-        <div
-          onClick={() => onNavigateTab('daily')}
-          className="bg-slate-900/80 backdrop-blur-md border border-slate-800 hover:border-cyan-500/40 rounded-2xl p-4 cursor-pointer transition shadow-lg group"
-        >
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-2xl">🎓</span>
-            <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
-              currentLog.collegeStudyMinutes >= collegeTarget ? 'bg-emerald-500/10 text-emerald-400' : 'bg-cyan-500/10 text-cyan-300'
-            }`}>
-              {currentLog.collegeStudyMinutes}/{collegeTarget}m
-            </span>
-          </div>
-          <div className="font-bold text-white text-sm group-hover:text-cyan-300 transition">
-            100 Menit Belajar Kuliah
-          </div>
-          <p className="text-[11px] text-slate-400 mt-0.5">
-            {currentLog.collegeStudyMinutes >= collegeTarget ? 'Target tercapai!' : `Kurang ${Math.max(0, collegeTarget - currentLog.collegeStudyMinutes)} menit lagi`}
-          </p>
-        </div>
-      </div>
-
-      {/* Grid: Urgent College Tasks & Active Projects */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {/* Urgent College Tasks Widget */}
-        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-3xl p-5 shadow-xl flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center space-x-2">
-                <GraduationCap className="w-5 h-5 text-cyan-400" />
-                <h3 className="font-bold text-white text-base">Deadline Kuliah Terdekat</h3>
-              </div>
-              <button
-                onClick={() => onNavigateTab('college')}
-                className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center space-x-1"
-              >
-                <span>Lihat Semua</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {urgentTasks.length === 0 ? (
-              <div className="text-center py-8 text-slate-400 text-xs">
-                Tidak ada deadline tugas yang mendesak. Kerja bagus! ✨
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                {urgentTasks.map((task) => (
-                  <div
-                    key={task.id}
-                    onClick={() => onNavigateTab('college')}
-                    className="p-3 rounded-2xl bg-slate-950/60 border border-slate-800/80 hover:border-cyan-500/30 cursor-pointer transition flex items-center justify-between"
-                  >
-                    <div>
-                      <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider block">
-                        {task.course}
-                      </span>
-                      <span className="text-xs font-semibold text-white block mt-0.5">
-                        {task.title}
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-[11px] text-amber-300 font-medium block">
-                        {task.dueDate}
-                      </span>
-                      <span className="text-[10px] text-slate-500 capitalize">
-                        {task.priority} Priority
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <button
-            onClick={() => onNavigateTab('college')}
-            className="w-full mt-4 py-2 bg-slate-800/70 hover:bg-slate-800 text-slate-200 text-xs font-semibold rounded-xl transition flex items-center justify-center space-x-1.5"
-          >
-            <span>Buka Tugas Kuliah</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* Active Projects Widget */}
-        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-3xl p-5 shadow-xl flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center space-x-2">
-                <Sparkles className="w-5 h-5 text-violet-400" />
-                <h3 className="font-bold text-white text-base">Personal Projects Aktif</h3>
-              </div>
-              <button
-                onClick={() => onNavigateTab('projects')}
-                className="text-xs text-violet-400 hover:text-violet-300 flex items-center space-x-1"
-              >
-                <span>Lihat Semua</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {activeProjects.length === 0 ? (
-              <div className="text-center py-8 text-slate-400 text-xs">
-                Belum ada project yang sedang aktif. Mulai rancang project baru! 🚀
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                {activeProjects.map((p) => {
-                  const completedCount = p.tasks.filter((t) => t.completed).length;
-                  const total = p.tasks.length;
-                  const pct = total > 0 ? Math.round((completedCount / total) * 100) : 0;
-                  return (
-                    <div
-                      key={p.id}
-                      onClick={() => onNavigateTab('projects')}
-                      className="p-3 rounded-2xl bg-slate-950/60 border border-slate-800/80 hover:border-violet-500/30 cursor-pointer transition"
-                    >
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-xs font-bold text-white">{p.title}</span>
-                        <span className="text-[10px] text-violet-300 font-mono">
-                          {completedCount}/{total} ({pct}%)
-                        </span>
-                      </div>
-                      <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                        <div
-                          className="h-full bg-violet-500 rounded-full"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <button
-            onClick={() => onNavigateTab('projects')}
-            className="w-full mt-4 py-2 bg-slate-800/70 hover:bg-slate-800 text-slate-200 text-xs font-semibold rounded-xl transition flex items-center justify-center space-x-1.5"
-          >
-            <span>Buka Projects</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* 35-Day Consistency Heatmap Grid (GitHub Green Style) */}
-      <div className="bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-3xl p-5 sm:p-6 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-          <div className="flex items-center space-x-2">
-            <TrendingUp className="w-5 h-5 text-[#39d353]" />
-            <div>
-              <h3 className="font-bold text-white text-base">Konsistensi 35 Hari Terakhir</h3>
-              <p className="text-xs text-slate-400">GitHub-style commit heatmap kedisiplinan harian</p>
-            </div>
-          </div>
-          {/* GitHub Green Scale Legend */}
-          <div className="flex items-center space-x-1.5 text-[11px] text-slate-400">
-            <span>Rendah</span>
-            <span className="w-3 h-3 rounded-sm bg-slate-800/80 border border-slate-700/50" title="0%" />
-            <span className="w-3 h-3 rounded-sm bg-[#0e4429] border border-[#006d32]/40" title="1-25%" />
-            <span className="w-3 h-3 rounded-sm bg-[#006d32]" title="26-50%" />
-            <span className="w-3 h-3 rounded-sm bg-[#26a641]" title="51-75%" />
-            <span className="w-3 h-3 rounded-sm bg-[#39d353]" title="76-100%" />
-            <span>Tinggi</span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-7 sm:grid-cols-7 gap-2">
-          {heatmapDays.map((d, index) => (
-            <div
-              key={index}
-              className={`p-2 rounded-xl text-center flex flex-col items-center justify-center h-14 transition-all duration-200 hover:scale-105 cursor-pointer ${getHeatmapColor(
-                d.score
-              )}`}
-              title={`${d.dateStr}: ${d.score}% selesai`}
+      {/* 4. DEEP WORK & BELAJAR */}
+      <div className="grid sm:grid-cols-2 gap-4">
+        {workCards.map((c) => {
+          const pct = Math.min(100, (c.mins / c.target) * 100);
+          const done = c.mins >= c.target;
+          const deep = c.mode === 'deepWork';
+          return (
+            <section
+              key={c.mode}
+              className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5"
             >
-              <span className="text-[10px] opacity-75 font-medium">{d.label}</span>
-              <span className="text-xs font-mono font-bold mt-0.5">{d.score}%</span>
-            </div>
-          ))}
-        </div>
+              <header className="flex items-center justify-between mb-3">
+                <h2
+                  className={`flex items-center gap-2 text-sm font-bold ${
+                    deep ? 'text-indigo-300' : 'text-cyan-300'
+                  }`}
+                >
+                  {c.icon}
+                  {c.label}
+                </h2>
+                <span className={`text-xs font-bold ${done ? 'text-emerald-400' : 'text-slate-300'}`}>
+                  {c.mins}
+                  <span className="text-slate-500">/{c.target}m</span>
+                  {c.mins > c.target && (
+                    <span className="text-amber-400 ml-1">+{c.mins - c.target}</span>
+                  )}
+                </span>
+              </header>
+
+              <div className="h-2 bg-slate-800 rounded-full overflow-hidden mb-4">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    done ? 'bg-emerald-500' : deep ? 'bg-indigo-500' : 'bg-cyan-500'
+                  }`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onQuickStart(c.mode)}
+                  className={`flex-[2] flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold text-white transition ${
+                    deep ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-cyan-600 hover:bg-cyan-500'
+                  }`}
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" /> Quick Start
+                </button>
+                <button
+                  onClick={() => onLogManual(c.mode)}
+                  disabled={!isEditableDate(todayKey)}
+                  className="flex-1 flex items-center justify-center gap-1 py-2.5 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700"
+                  title="Catat waktu yang dikerjakan di luar timer"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Manual
+                </button>
+              </div>
+            </section>
+          );
+        })}
       </div>
     </div>
   );

@@ -1,267 +1,218 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Play, Pause, RotateCcw, CheckCircle, GraduationCap, Zap } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { playChimeSound } from '../services/audio';
+import { minutesFor } from '../services/storage';
+import type { DailyLog, WorkMode } from '../types';
 
-interface TimerModalProps {
-  initialMode?: 'deepWork' | 'college';
-  onLogCompletedMinutes: (minutes: number, mode: 'deepWork' | 'college') => void;
-  deepWorkMinutesToday: number;
-  collegeMinutesToday: number;
+interface Props {
+  mode: WorkMode;
+  onChangeMode: (mode: WorkMode) => void;
+  /** Timer tidak menulis apa pun sendiri — menit baru masuk setelah catatan diisi. */
+  onSessionFinished: (mode: WorkMode, minutes: number) => void;
+  log?: DailyLog;
   deepWorkTarget: number;
   collegeTarget: number;
 }
 
-export const TimerModal: React.FC<TimerModalProps> = ({
-  initialMode = 'deepWork',
-  onLogCompletedMinutes,
-  deepWorkMinutesToday,
-  collegeMinutesToday,
+const PRESETS = [15, 25, 45, 50, 100];
+
+export const TimerModal: React.FC<Props> = ({
+  mode,
+  onChangeMode,
+  onSessionFinished,
+  log,
   deepWorkTarget,
   collegeTarget,
 }) => {
-  const [mode, setMode] = useState<'deepWork' | 'college'>(initialMode);
-  const [selectedDurationMins, setSelectedDurationMins] = useState(25);
+  const [durationMins, setDurationMins] = useState(25);
   const [secondsRemaining, setSecondsRemaining] = useState(25 * 60);
   const [isRunning, setIsRunning] = useState(false);
 
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   useEffect(() => {
-    if (initialMode) setMode(initialMode);
-  }, [initialMode]);
+    if (!isRunning) return;
+    const id = setInterval(() => setSecondsRemaining((prev) => Math.max(0, prev - 1)), 1000);
+    return () => clearInterval(id);
+  }, [isRunning]);
 
+  // Efek terpisah: menembakkan penyelesaian dari dalam updater state bikin
+  // sesi tercatat dobel di StrictMode.
   useEffect(() => {
-    if (isRunning) {
-      timerRef.current = setInterval(() => {
-        setSecondsRemaining((prev) => {
-          if (prev <= 1) {
-            handleTimerComplete();
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    } else if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isRunning, selectedDurationMins, mode]);
-
-  const handleTimerComplete = () => {
+    if (!isRunning || secondsRemaining > 0) return;
     setIsRunning(false);
+    setSecondsRemaining(durationMins * 60);
     playChimeSound('timer');
     confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-    onLogCompletedMinutes(selectedDurationMins, mode);
-    alert(`🎉 Sesi ${mode === 'deepWork' ? 'Deep Work' : 'Kuliah'} selama ${selectedDurationMins} menit selesai dan otomatis dicatat ke progress hari ini!`);
-    setSecondsRemaining(selectedDurationMins * 60);
-  };
+    onSessionFinished(mode, durationMins);
+  }, [isRunning, secondsRemaining, durationMins, mode, onSessionFinished]);
 
-  const handleStartPause = () => {
-    setIsRunning(!isRunning);
-  };
-
-  const handleReset = () => {
+  const selectPreset = (mins: number) => {
     setIsRunning(false);
-    setSecondsRemaining(selectedDurationMins * 60);
-  };
-
-  const handleSelectPreset = (mins: number) => {
-    setIsRunning(false);
-    setSelectedDurationMins(mins);
+    setDurationMins(mins);
     setSecondsRemaining(mins * 60);
   };
 
-  const handleFinishEarly = () => {
-    const elapsedSeconds = selectedDurationMins * 60 - secondsRemaining;
-    const elapsedMins = Math.floor(elapsedSeconds / 60);
-    if (elapsedMins < 1) {
+  const finishEarly = () => {
+    const elapsed = Math.floor((durationMins * 60 - secondsRemaining) / 60);
+    if (elapsed < 1) {
       alert('Sesi belum mencapai 1 menit.');
       return;
     }
-
-    if (confirm(`Selesaikan sekarang dan catat ${elapsedMins} menit ke ${mode === 'deepWork' ? 'Deep Work' : 'Kuliah'}?`)) {
-      setIsRunning(false);
-      onLogCompletedMinutes(elapsedMins, mode);
-      playChimeSound('complete');
-      confetti({ particleCount: 60, spread: 50 });
-      setSecondsRemaining(selectedDurationMins * 60);
-    }
+    setIsRunning(false);
+    setSecondsRemaining(durationMins * 60);
+    playChimeSound('complete');
+    onSessionFinished(mode, elapsed);
   };
 
-  const formatTime = (totalSecs: number) => {
-    const mins = Math.floor(totalSecs / 60);
-    const secs = totalSecs % 60;
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  const switchMode = (next: WorkMode) => {
+    if (isRunning && !confirm('Timer sedang berjalan. Ganti mode dan reset timer?')) return;
+    setIsRunning(false);
+    setSecondsRemaining(durationMins * 60);
+    onChangeMode(next);
   };
 
-  const currentDayMins = mode === 'deepWork' ? deepWorkMinutesToday : collegeMinutesToday;
-  const currentTarget = mode === 'deepWork' ? deepWorkTarget : collegeTarget;
+  const formatTime = (total: number) =>
+    `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+
+  const deep = mode === 'deepWork';
+  const todayMins = minutesFor(log, mode);
+  const target = deep ? deepWorkTarget : collegeTarget;
+  const pct = Math.min(100, (todayMins / target) * 100);
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 pb-20">
-      {/* Mode Selector */}
-      <div className="flex bg-slate-900 border border-slate-800 p-1.5 rounded-2xl shadow-lg">
-        <button
-          onClick={() => {
-            if (!isRunning) {
-              setMode('deepWork');
-            } else if (confirm('Timer sedang berjalan. Ganti mode dan reset timer?')) {
-              setIsRunning(false);
-              setMode('deepWork');
-              setSecondsRemaining(selectedDurationMins * 60);
-            }
-          }}
-          className={`flex-1 py-3 px-4 rounded-xl flex items-center justify-center space-x-2 text-xs sm:text-sm font-semibold transition ${
-            mode === 'deepWork'
-              ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-600/30'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Zap className="w-4 h-4" />
-          <span>⚡ Deep Work (Target: {deepWorkTarget}m)</span>
-        </button>
-
-        <button
-          onClick={() => {
-            if (!isRunning) {
-              setMode('college');
-            } else if (confirm('Timer sedang berjalan. Ganti mode dan reset timer?')) {
-              setIsRunning(false);
-              setMode('college');
-              setSecondsRemaining(selectedDurationMins * 60);
-            }
-          }}
-          className={`flex-1 py-3 px-4 rounded-xl flex items-center justify-center space-x-2 text-xs sm:text-sm font-semibold transition ${
-            mode === 'college'
-              ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-600/30'
-              : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <GraduationCap className="w-4 h-4" />
-          <span>🎓 Belajar Kuliah (Target: {collegeTarget}m)</span>
-        </button>
+    <div className="max-w-2xl mx-auto space-y-5 pb-24">
+      <div className="flex bg-slate-900 border border-slate-800 p-1.5 rounded-2xl">
+        {(
+          [
+            ['deepWork', 'Deep Work', <Zap className="w-4 h-4" key="z" />, deepWorkTarget],
+            ['college', 'Belajar Kuliah', <GraduationCap className="w-4 h-4" key="g" />, collegeTarget],
+          ] as [WorkMode, string, React.ReactNode, number][]
+        ).map(([id, label, icon, t]) => (
+          <button
+            key={id}
+            onClick={() => switchMode(id)}
+            className={`flex-1 py-3 px-3 rounded-xl flex items-center justify-center gap-2 text-xs sm:text-sm font-semibold transition ${
+              mode === id
+                ? id === 'deepWork'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-cyan-600 text-white'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {icon}
+            <span>
+              {label} <span className="opacity-70">({t}m)</span>
+            </span>
+          </button>
+        ))}
       </div>
 
-      {/* Main Timer Display */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 sm:p-12 shadow-2xl flex flex-col items-center relative overflow-hidden text-center">
-        {/* Glow ambient background */}
-        <div className={`absolute -top-24 -left-24 w-72 h-72 rounded-full blur-3xl opacity-20 pointer-events-none ${
-          mode === 'deepWork' ? 'bg-indigo-500' : 'bg-cyan-500'
-        }`} />
-        <div className={`absolute -bottom-24 -right-24 w-72 h-72 rounded-full blur-3xl opacity-20 pointer-events-none ${
-          mode === 'deepWork' ? 'bg-violet-500' : 'bg-blue-500'
-        }`} />
-
-        {/* Status header */}
-        <div className="flex items-center space-x-2 mb-6 z-10">
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 sm:p-10 flex flex-col items-center text-center">
+        <div className="flex items-center gap-2 mb-5">
           <span className="relative flex h-2.5 w-2.5">
             {isRunning && (
-              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                mode === 'deepWork' ? 'bg-indigo-400' : 'bg-cyan-400'
-              }`} />
+              <span
+                className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                  deep ? 'bg-indigo-400' : 'bg-cyan-400'
+                }`}
+              />
             )}
-            <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-              isRunning
-                ? mode === 'deepWork' ? 'bg-indigo-500' : 'bg-cyan-500'
-                : 'bg-slate-500'
-            }`} />
+            <span
+              className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                isRunning ? (deep ? 'bg-indigo-500' : 'bg-cyan-500') : 'bg-slate-500'
+              }`}
+            />
           </span>
           <span className="text-xs uppercase tracking-widest font-bold text-slate-400">
             {isRunning ? 'Sedang Fokus' : 'Timer Siap'}
           </span>
         </div>
 
-        {/* Big Digital Clock */}
-        <div className="font-mono text-6xl sm:text-8xl font-black tracking-tight text-white mb-6 select-none drop-shadow-lg z-10">
+        <div className="font-mono text-6xl sm:text-8xl font-black tracking-tight text-white mb-6 select-none">
           {formatTime(secondsRemaining)}
         </div>
 
-        {/* Today's Target progress bar */}
-        <div className="w-full max-w-md bg-slate-950/80 border border-slate-800 rounded-2xl p-3 mb-8 z-10">
-          <div className="flex items-center justify-between text-xs text-slate-400 mb-1.5 font-medium">
-            <span>Pencapaian Hari Ini:</span>
+        <div className="w-full max-w-md bg-slate-950/80 border border-slate-800 rounded-2xl p-3 mb-7">
+          <div className="flex items-center justify-between text-xs text-slate-400 mb-1.5">
+            <span>Hari ini</span>
             <span className="font-bold text-white">
-              {currentDayMins} / {currentTarget} menit ({Math.min(100, Math.round((currentDayMins / currentTarget) * 100))}%)
+              {todayMins} / {target} menit
+              {todayMins > target && (
+                <span className="text-amber-400 ml-1">+{todayMins - target}</span>
+              )}
             </span>
           </div>
           <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-300 ${
-                mode === 'deepWork' ? 'bg-indigo-500' : 'bg-cyan-500'
+              className={`h-full rounded-full transition-all ${
+                todayMins >= target ? 'bg-emerald-500' : deep ? 'bg-indigo-500' : 'bg-cyan-500'
               }`}
-              style={{ width: `${Math.min(100, (currentDayMins / currentTarget) * 100)}%` }}
+              style={{ width: `${pct}%` }}
             />
           </div>
         </div>
 
-        {/* Controls */}
-        <div className="flex items-center space-x-4 mb-8 z-10">
+        <div className="flex items-center gap-4 mb-7">
           <button
-            onClick={handleReset}
-            className="p-3.5 rounded-2xl bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-700/60 transition active:scale-95"
-            title="Reset Timer"
+            onClick={() => {
+              setIsRunning(false);
+              setSecondsRemaining(durationMins * 60);
+            }}
+            className="p-3.5 rounded-2xl bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-700/60 active:scale-95"
+            title="Reset"
           >
             <RotateCcw className="w-5 h-5" />
           </button>
 
           <button
-            onClick={handleStartPause}
-            className={`px-8 py-4 rounded-2xl font-bold text-base shadow-xl flex items-center space-x-2 transition active:scale-95 ${
+            onClick={() => setIsRunning((v) => !v)}
+            className={`px-8 py-4 rounded-2xl font-bold text-base flex items-center gap-2 active:scale-95 transition ${
               isRunning
-                ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-600/25'
-                : mode === 'deepWork'
-                ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30'
-                : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-cyan-600/30'
+                ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                : deep
+                ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                : 'bg-cyan-600 hover:bg-cyan-500 text-white'
             }`}
           >
-            {isRunning ? (
-              <>
-                <Pause className="w-5 h-5 fill-current" />
-                <span>Pause</span>
-              </>
-            ) : (
-              <>
-                <Play className="w-5 h-5 fill-current" />
-                <span>Mulai Fokus</span>
-              </>
-            )}
+            {isRunning ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
+            <span>{isRunning ? 'Pause' : 'Mulai Fokus'}</span>
           </button>
 
           {isRunning && (
             <button
-              onClick={handleFinishEarly}
-              className="p-3.5 rounded-2xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 transition active:scale-95"
-              title="Selesai & Catat Menit Sekarang"
+              onClick={finishEarly}
+              className="p-3.5 rounded-2xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 active:scale-95"
+              title="Selesai sekarang & catat"
             >
               <CheckCircle className="w-5 h-5" />
             </button>
           )}
         </div>
 
-        {/* Presets */}
-        <div className="z-10 flex flex-wrap items-center justify-center gap-2">
-          <span className="text-xs text-slate-400 mr-2">Durasi Sesi:</span>
-          {[15, 25, 45, 50, 100].map((mins) => (
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <span className="text-xs text-slate-400 mr-1">Durasi:</span>
+          {PRESETS.map((m) => (
             <button
-              key={mins}
-              onClick={() => handleSelectPreset(mins)}
+              key={m}
+              onClick={() => selectPreset(m)}
               disabled={isRunning}
               className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
-                selectedDurationMins === mins
-                  ? mode === 'deepWork'
+                durationMins === m
+                  ? deep
                     ? 'bg-indigo-600/20 border-indigo-500/40 text-indigo-300'
                     : 'bg-cyan-600/20 border-cyan-500/40 text-cyan-300'
-                  : 'bg-slate-800/40 border-slate-700/50 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  : 'bg-slate-800/40 border-slate-700/50 text-slate-400 hover:text-slate-200'
               } ${isRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
-              {mins}m {mins === 100 ? '(Full Target)' : ''}
+              {m}m
             </button>
           ))}
         </div>
+
+        <p className="text-[11px] text-slate-500 mt-6 max-w-sm">
+          Setelah sesi selesai kamu wajib menulis apa yang dikerjakan. Tanpa itu, menitnya tidak
+          masuk hitungan.
+        </p>
       </div>
     </div>
   );
