@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Database, 
@@ -11,8 +11,12 @@ import {
   ExternalLink,
   AlertCircle,
   CheckCircle2,
-  RefreshCw
+  RefreshCw,
+  Smartphone,
+  QrCode,
+  Share2
 } from 'lucide-react';
+import QRCode from 'qrcode';
 import type { AppSettings, AppState } from '../types';
 import { SQL_SCHEMA_SCRIPT, testSupabaseConnection } from '../services/supabase';
 
@@ -23,6 +27,8 @@ interface SettingsModalProps {
   onSaveSettings: (settings: AppSettings) => void;
   fullState: AppState;
   onImportState: (newState: AppState) => void;
+  onForcePush?: () => Promise<boolean>;
+  onForcePull?: () => Promise<boolean>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -32,12 +38,55 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSaveSettings,
   fullState,
   onImportState,
+  onForcePush,
+  onForcePull,
 }) => {
   const [formData, setFormData] = useState<AppSettings>({ ...settings });
   const [isCopied, setIsCopied] = useState(false);
+  const [isSyncLinkCopied, setIsSyncLinkCopied] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [showSql, setShowSql] = useState(false);
+  const [showQr, setShowQr] = useState(false);
+  const [isPushing, setIsPushing] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
+  const [pushPullMsg, setPushPullMsg] = useState<{ success: boolean; text: string } | null>(null);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    setFormData({ ...settings });
+  }, [settings, isOpen]);
+
+  // Generate sync link for HP
+  const getSyncLink = () => {
+    if (!formData.supabaseUrl || !formData.supabaseAnonKey) return '';
+    try {
+      const payload = JSON.stringify({
+        url: formData.supabaseUrl,
+        key: formData.supabaseAnonKey,
+      });
+      const encoded = btoa(payload);
+      return `${window.location.origin}${window.location.pathname}#sync=${encoded}`;
+    } catch {
+      return '';
+    }
+  };
+
+  // Render QR Code on canvas
+  useEffect(() => {
+    if (showQr && canvasRef.current && formData.supabaseUrl && formData.supabaseAnonKey) {
+      const syncUrl = getSyncLink();
+      QRCode.toCanvas(canvasRef.current, syncUrl, {
+        width: 200,
+        margin: 2,
+        color: {
+          dark: '#0f172a',
+          light: '#ffffff',
+        },
+      }).catch((err) => console.error('QR render error:', err));
+    }
+  }, [showQr, formData.supabaseUrl, formData.supabaseAnonKey]);
 
   if (!isOpen) return null;
 
@@ -45,6 +94,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     navigator.clipboard.writeText(SQL_SCHEMA_SCRIPT);
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  const handleCopySyncLink = () => {
+    const link = getSyncLink();
+    if (!link) {
+      alert('Masukkan Supabase Project URL dan Anon Key terlebih dahulu.');
+      return;
+    }
+    navigator.clipboard.writeText(link);
+    setIsSyncLinkCopied(true);
+    setTimeout(() => setIsSyncLinkCopied(false), 2500);
   };
 
   const handleTestConnection = async () => {
@@ -65,6 +125,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleSave = () => {
     onSaveSettings(formData);
     onClose();
+  };
+
+  const handleManualPush = async () => {
+    if (!onForcePush) return;
+    setIsPushing(true);
+    setPushPullMsg(null);
+    const ok = await onForcePush();
+    setIsPushing(false);
+    setPushPullMsg({
+      success: ok,
+      text: ok ? '✅ Data komputer berhasil diunggah ke Supabase Cloud!' : '❌ Gagal upload ke Supabase. Cek koneksi.',
+    });
+  };
+
+  const handleManualPull = async () => {
+    if (!onForcePull) return;
+    setIsPulling(true);
+    setPushPullMsg(null);
+    const ok = await onForcePull();
+    setIsPulling(false);
+    setPushPullMsg({
+      success: ok,
+      text: ok ? '✅ Data terbaru berhasil diunduh dari Supabase Cloud!' : '❌ Gagal download dari Supabase atau belum ada data di cloud.',
+    });
   };
 
   const handleExportJson = () => {
@@ -92,7 +176,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         } else {
           alert('Format file JSON tidak valid untuk DailyOS.');
         }
-      } catch (err) {
+      } catch {
         alert('Gagal membaca file JSON.');
       }
     };
@@ -224,7 +308,88 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Section 2: Keamanan PIN Pribadi */}
+          {/* Section 2: 📱 Sambungkan HP Anda (Paling Mudah) */}
+          <div className="bg-gradient-to-r from-indigo-950/40 to-slate-900 border border-indigo-500/40 rounded-2xl p-4 sm:p-5 shadow-lg">
+            <div className="flex items-center space-x-2 mb-2">
+              <Smartphone className="w-4 h-4 text-indigo-400" />
+              <h3 className="text-sm font-semibold text-white">Sambungkan ke HP Anda (Instan)</h3>
+            </div>
+            <p className="text-xs text-slate-300 mb-4 leading-relaxed">
+              Browser di HP memerlukan konfigurasi Supabase yang sama agar tersinkron. Anda tidak perlu mengetik ulang kuncinya di HP, cukup scan QR code atau salin link ini dan buka di HP:
+            </p>
+
+            <div className="flex flex-wrap gap-2.5 mb-3">
+              <button
+                type="button"
+                onClick={handleCopySyncLink}
+                className="flex items-center space-x-2 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white rounded-xl shadow-md shadow-indigo-600/30 transition active:scale-95"
+              >
+                {isSyncLinkCopied ? <Check className="w-4 h-4 text-emerald-300" /> : <Share2 className="w-4 h-4" />}
+                <span>{isSyncLinkCopied ? 'Link Disalin ke Clipboard!' : 'Salin Link Sync untuk HP'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowQr(!showQr)}
+                className="flex items-center space-x-2 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 rounded-xl border border-slate-700 transition"
+              >
+                <QrCode className="w-4 h-4 text-indigo-300" />
+                <span>{showQr ? 'Tutup QR Code' : 'Scan QR Code di Layar HP'}</span>
+              </button>
+            </div>
+
+            {showQr && (
+              <div className="mt-3 p-4 bg-slate-950 border border-slate-800 rounded-2xl flex flex-col items-center">
+                <p className="text-xs text-slate-300 font-semibold mb-3">
+                  Arahkan kamera HP Anda ke QR code ini:
+                </p>
+                <div className="p-3 bg-white rounded-2xl shadow-xl">
+                  <canvas ref={canvasRef} />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-2 text-center max-w-xs">
+                  HP Anda akan otomatis membuka aplikasi DailyOS dan langsung terhubung dengan data Supabase.
+                </p>
+              </div>
+            )}
+
+            {/* Manual Push / Pull buttons */}
+            <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-slate-400 mr-1">Kontrol Manual:</span>
+              <button
+                type="button"
+                onClick={handleManualPush}
+                disabled={isPushing}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 rounded-lg transition"
+              >
+                <Upload className="w-3.5 h-3.5 text-indigo-400" />
+                <span>{isPushing ? 'Mengunggah...' : 'Upload Data Komputer ke Cloud'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleManualPull}
+                disabled={isPulling}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-200 rounded-lg transition"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{isPulling ? 'Mengunduh...' : 'Download Data Terbaru dari Cloud'}</span>
+              </button>
+            </div>
+
+            {pushPullMsg && (
+              <div
+                className={`mt-2.5 p-2 rounded-xl text-xs font-medium ${
+                  pushPullMsg.success
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                    : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                }`}
+              >
+                {pushPullMsg.text}
+              </div>
+            )}
+          </div>
+
+          {/* Section 3: Keamanan PIN Pribadi */}
           <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-4 sm:p-5">
             <div className="flex items-center space-x-2 mb-3">
               <Shield className="w-4 h-4 text-amber-400" />
@@ -264,7 +429,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Section 3: Target Harian */}
+          {/* Section 4: Target Harian */}
           <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-4 sm:p-5">
             <div className="flex items-center space-x-2 mb-3">
               <Sliders className="w-4 h-4 text-indigo-400" />
@@ -308,7 +473,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Section 4: Cadangan & Pemulihan */}
+          {/* Section 5: Cadangan & Pemulihan */}
           <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-4 sm:p-5">
             <h3 className="text-sm font-semibold text-slate-200 mb-2">Cadangan & Ekspor Data</h3>
             <p className="text-xs text-slate-400 mb-3">

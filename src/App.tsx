@@ -46,7 +46,57 @@ export const App: React.FC = () => {
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isInitialLoadRef = useRef(true);
 
-  // 1. Initial Remote Fetch & Supabase Realtime Subscription
+  // 1. Detect #sync= hash from Magic Link or QR code scan (Ideal for HP connection)
+  useEffect(() => {
+    try {
+      const hash = window.location.hash;
+      if (hash && hash.startsWith('#sync=')) {
+        const raw = hash.replace('#sync=', '');
+        const parsed = JSON.parse(atob(raw));
+        if (parsed.url && parsed.key) {
+          const nextSettings = {
+            ...state.settings,
+            supabaseUrl: parsed.url,
+            supabaseAnonKey: parsed.key,
+          };
+          const nextState = { ...state, settings: nextSettings };
+          setState(nextState);
+          saveLocalState(nextState);
+
+          // Clean URL hash
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+
+          const client = getSupabaseClient(parsed.url, parsed.key);
+          if (client) {
+            setSyncStatus('syncing');
+            fetchRemoteState(client).then((remoteData) => {
+              if (remoteData) {
+                setState((prev) => {
+                  const merged = {
+                    ...prev,
+                    ...remoteData,
+                    settings: {
+                      ...remoteData.settings,
+                      supabaseUrl: parsed.url,
+                      supabaseAnonKey: parsed.key,
+                    },
+                  };
+                  saveLocalState(merged);
+                  return merged;
+                });
+                setSyncStatus('synced');
+                alert('🎉 Berhasil! HP Anda kini telah terhubung ke Supabase dan data komputer telah disinkronkan!');
+              }
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to parse sync token from hash:', err);
+    }
+  }, []);
+
+  // 2. Initial Remote Fetch & Supabase Realtime Subscription
   useEffect(() => {
     const client = getSupabaseClient(state.settings.supabaseUrl, state.settings.supabaseAnonKey);
     if (!client) {
@@ -57,7 +107,7 @@ export const App: React.FC = () => {
     setSyncStatus('syncing');
 
     fetchRemoteState(client)
-      .then((remoteData) => {
+      .then(async (remoteData) => {
         if (remoteData) {
           setState((prev) => {
             const merged: AppState = {
@@ -72,8 +122,12 @@ export const App: React.FC = () => {
             saveLocalState(merged);
             return merged;
           });
+          setSyncStatus('synced');
+        } else {
+          // If remote row is empty in Supabase, upload our current local state immediately!
+          const ok = await syncStateToRemote(client, state);
+          setSyncStatus(ok ? 'synced' : 'error');
         }
-        setSyncStatus('synced');
       })
       .catch((err) => {
         console.error('Initial fetch failed:', err);
@@ -110,7 +164,7 @@ export const App: React.FC = () => {
     };
   }, [state.settings.supabaseUrl, state.settings.supabaseAnonKey]);
 
-  // 2. Debounced save to localStorage & Supabase
+  // 3. Debounced save to localStorage & Supabase
   useEffect(() => {
     if (isInitialLoadRef.current) {
       isInitialLoadRef.current = false;
@@ -131,7 +185,7 @@ export const App: React.FC = () => {
     syncTimerRef.current = setTimeout(async () => {
       const ok = await syncStateToRemote(client, state);
       setSyncStatus(ok ? 'synced' : 'error');
-    }, 1200);
+    }, 1000);
 
     return () => {
       if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
@@ -244,16 +298,63 @@ export const App: React.FC = () => {
     setActiveTab('timer');
   };
 
-  const handleSaveSettings = (newSettings: AppSettings) => {
-    setState((prev) => ({
-      ...prev,
+  // Immediate Save & Push Settings
+  const handleSaveSettings = async (newSettings: AppSettings) => {
+    const updatedState: AppState = {
+      ...state,
       settings: newSettings,
-    }));
+    };
+    setState(updatedState);
+    saveLocalState(updatedState);
+
+    const client = getSupabaseClient(newSettings.supabaseUrl, newSettings.supabaseAnonKey);
+    if (client) {
+      setSyncStatus('syncing');
+      const ok = await syncStateToRemote(client, updatedState);
+      setSyncStatus(ok ? 'synced' : 'error');
+    }
   };
 
   const handleImportState = (newState: AppState) => {
     setState(newState);
     saveLocalState(newState);
+  };
+
+  // Manual Force Push to Cloud
+  const handleForcePush = async (): Promise<boolean> => {
+    const client = getSupabaseClient(state.settings.supabaseUrl, state.settings.supabaseAnonKey);
+    if (!client) return false;
+    setSyncStatus('syncing');
+    const ok = await syncStateToRemote(client, state);
+    setSyncStatus(ok ? 'synced' : 'error');
+    return ok;
+  };
+
+  // Manual Force Pull from Cloud
+  const handleForcePull = async (): Promise<boolean> => {
+    const client = getSupabaseClient(state.settings.supabaseUrl, state.settings.supabaseAnonKey);
+    if (!client) return false;
+    setSyncStatus('syncing');
+    const remoteData = await fetchRemoteState(client);
+    if (remoteData) {
+      setState((prev) => {
+        const merged: AppState = {
+          ...prev,
+          ...remoteData,
+          settings: {
+            ...remoteData.settings,
+            supabaseUrl: prev.settings.supabaseUrl,
+            supabaseAnonKey: prev.settings.supabaseAnonKey,
+          },
+        };
+        saveLocalState(merged);
+        return merged;
+      });
+      setSyncStatus('synced');
+      return true;
+    }
+    setSyncStatus('error');
+    return false;
   };
 
   const handleSyncManual = async () => {
@@ -265,6 +366,11 @@ export const App: React.FC = () => {
     setSyncStatus('syncing');
     const ok = await syncStateToRemote(client, state);
     setSyncStatus(ok ? 'synced' : 'error');
+    if (ok) {
+      alert('✅ Sinkronisasi berhasil! Data Anda tersimpan di cloud.');
+    } else {
+      alert('❌ Gagal menyinkronkan ke Supabase. Periksa internet atau buka menu Settings.');
+    }
   };
 
   const streak = calculateCurrentStreak(state.dailyLogs);
@@ -369,6 +475,8 @@ export const App: React.FC = () => {
         onSaveSettings={handleSaveSettings}
         fullState={state}
         onImportState={handleImportState}
+        onForcePush={handleForcePush}
+        onForcePull={handleForcePull}
       />
     </div>
   );

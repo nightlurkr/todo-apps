@@ -35,13 +35,17 @@ export const DEFAULT_HABITS: HabitDefinition[] = [
   { id: 'sleep', name: 'Tidur Teratur & Cukup', icon: '🌙', createdAt: new Date().toISOString() },
 ];
 
+// Fallback to Vite environment variables if available
+const defaultEnvUrl = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_SUPABASE_URL || '';
+const defaultEnvKey = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_SUPABASE_ANON_KEY || '';
+
 export const INITIAL_STATE: AppState = {
   version: 1,
   settings: {
     pin: '1234',
     pinEnabled: false,
-    supabaseUrl: '',
-    supabaseAnonKey: '',
+    supabaseUrl: defaultEnvUrl,
+    supabaseAnonKey: defaultEnvKey,
     deepWorkDailyTarget: 100,
     collegeDailyTarget: 100,
   },
@@ -92,10 +96,23 @@ export function loadLocalState(): AppState {
       dailyLogs[today] = createEmptyDailyLog(today);
     }
 
+    const mergedSettings = {
+      ...INITIAL_STATE.settings,
+      ...(parsed.settings || {}),
+    };
+
+    // If local settings don't have url/key, use env vars if available
+    if (!mergedSettings.supabaseUrl && defaultEnvUrl) {
+      mergedSettings.supabaseUrl = defaultEnvUrl;
+    }
+    if (!mergedSettings.supabaseAnonKey && defaultEnvKey) {
+      mergedSettings.supabaseAnonKey = defaultEnvKey;
+    }
+
     return {
       version: 1,
-      settings: { ...INITIAL_STATE.settings, ...(parsed.settings || {}) },
-      habitDefinitions: parsed.habitDefinitions?.length ? parsed.habitDefinitions : DEFAULT_HABITS,
+      settings: mergedSettings,
+      habitDefinitions: parsed.habitDefinitions !== undefined ? parsed.habitDefinitions : DEFAULT_HABITS,
       dailyLogs,
       collegeTasks: parsed.collegeTasks || [],
       projects: parsed.projects || [],
