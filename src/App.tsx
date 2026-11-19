@@ -18,7 +18,8 @@ import {
 import { 
   getSupabaseClient, 
   fetchRemoteState, 
-  syncStateToRemote 
+  syncStateToRemote,
+  CLIENT_ID
 } from './services/supabase';
 import { AnimatedBackground } from './components/AnimatedBackground';
 import { Navbar } from './components/Navbar';
@@ -46,7 +47,7 @@ export const App: React.FC = () => {
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isInitialLoadRef = useRef(true);
 
-  // 1. Detect #sync= hash from Magic Link or QR code scan (Ideal for HP connection)
+  // 1. Detect #sync= hash from Magic Link or QR code scan (Instant HP setup)
   useEffect(() => {
     try {
       const hash = window.location.hash;
@@ -63,7 +64,6 @@ export const App: React.FC = () => {
           setState(nextState);
           saveLocalState(nextState);
 
-          // Clean URL hash
           window.history.replaceState(null, '', window.location.pathname + window.location.search);
 
           const client = getSupabaseClient(parsed.url, parsed.key);
@@ -134,27 +134,48 @@ export const App: React.FC = () => {
         setSyncStatus('error');
       });
 
+    // Realtime channel with anti-echo protection
     const channel = client
       .channel('public:accountability_sync')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'accountability_sync' },
         (payload) => {
-          if (payload.new && (payload.new as { data?: AppState }).data) {
-            const incoming = (payload.new as { data: AppState }).data;
-            setState((prev) => {
-              const updated = {
-                ...prev,
-                dailyLogs: { ...prev.dailyLogs, ...(incoming.dailyLogs || {}) },
-                collegeTasks: incoming.collegeTasks || prev.collegeTasks,
-                projects: incoming.projects || prev.projects,
-                habitDefinitions: incoming.habitDefinitions || prev.habitDefinitions,
-              };
-              saveLocalState(updated);
-              return updated;
-            });
-            setSyncStatus('synced');
+          const payloadData = (payload.new as { data?: AppState & { _clientId?: string; _timestamp?: number } })?.data;
+          if (!payloadData) return;
+
+          // CRITICAL: Ignore broadcasts that originated from this exact browser tab/device
+          if (payloadData._clientId === CLIENT_ID) {
+            return;
           }
+
+          setState((prev) => {
+            // Intelligent per-day merge: only overwrite days if the incoming timestamp is newer
+            const mergedDailyLogs: Record<string, DailyLog> = { ...prev.dailyLogs };
+            for (const [dateKey, incomingLog] of Object.entries(payloadData.dailyLogs || {})) {
+              const localLog = prev.dailyLogs[dateKey];
+              if (!localLog) {
+                mergedDailyLogs[dateKey] = incomingLog;
+              } else {
+                const localTime = new Date(localLog.updatedAt || 0).getTime();
+                const incomingTime = new Date(incomingLog.updatedAt || 0).getTime();
+                if (incomingTime >= localTime) {
+                  mergedDailyLogs[dateKey] = incomingLog;
+                }
+              }
+            }
+
+            const updated: AppState = {
+              ...prev,
+              dailyLogs: mergedDailyLogs,
+              collegeTasks: payloadData.collegeTasks || prev.collegeTasks,
+              projects: payloadData.projects || prev.projects,
+              habitDefinitions: payloadData.habitDefinitions || prev.habitDefinitions,
+            };
+            saveLocalState(updated);
+            return updated;
+          });
+          setSyncStatus('synced');
         }
       )
       .subscribe();
@@ -164,7 +185,7 @@ export const App: React.FC = () => {
     };
   }, [state.settings.supabaseUrl, state.settings.supabaseAnonKey]);
 
-  // 3. Debounced save to localStorage & Supabase
+  // 3. Fast debounced save to localStorage & Supabase
   useEffect(() => {
     if (isInitialLoadRef.current) {
       isInitialLoadRef.current = false;
@@ -182,10 +203,11 @@ export const App: React.FC = () => {
     setSyncStatus('syncing');
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
 
+    // Fast 400ms debounce
     syncTimerRef.current = setTimeout(async () => {
       const ok = await syncStateToRemote(client, state);
       setSyncStatus(ok ? 'synced' : 'error');
-    }, 1000);
+    }, 400);
 
     return () => {
       if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
@@ -199,7 +221,10 @@ export const App: React.FC = () => {
       ...prev,
       dailyLogs: {
         ...prev.dailyLogs,
-        [selectedDate]: updatedLog,
+        [selectedDate]: {
+          ...updatedLog,
+          updatedAt: new Date().toISOString(),
+        },
       },
     }));
   };
@@ -298,7 +323,6 @@ export const App: React.FC = () => {
     setActiveTab('timer');
   };
 
-  // Immediate Save & Push Settings
   const handleSaveSettings = async (newSettings: AppSettings) => {
     const updatedState: AppState = {
       ...state,
@@ -320,7 +344,6 @@ export const App: React.FC = () => {
     saveLocalState(newState);
   };
 
-  // Manual Force Push to Cloud
   const handleForcePush = async (): Promise<boolean> => {
     const client = getSupabaseClient(state.settings.supabaseUrl, state.settings.supabaseAnonKey);
     if (!client) return false;
@@ -330,7 +353,6 @@ export const App: React.FC = () => {
     return ok;
   };
 
-  // Manual Force Pull from Cloud
   const handleForcePull = async (): Promise<boolean> => {
     const client = getSupabaseClient(state.settings.supabaseUrl, state.settings.supabaseAnonKey);
     if (!client) return false;

@@ -5,6 +5,19 @@ let cachedClient: SupabaseClient | null = null;
 let currentUrl = '';
 let currentKey = '';
 
+// Unique client/device session ID to prevent echoing back our own optimistic updates
+export const CLIENT_ID = (() => {
+  try {
+    const existing = sessionStorage.getItem('dailyos_client_id');
+    if (existing) return existing;
+    const generated = 'client_' + Math.random().toString(36).substring(2, 9) + '_' + Date.now();
+    sessionStorage.setItem('dailyos_client_id', generated);
+    return generated;
+  } catch {
+    return 'client_' + Math.random().toString(36).substring(2, 9);
+  }
+})();
+
 export function getSupabaseClient(url?: string, key?: string): SupabaseClient | null {
   const targetUrl = url || '';
   const targetKey = key || '';
@@ -101,13 +114,23 @@ export async function fetchRemoteState(client: SupabaseClient): Promise<AppState
   }
 }
 
-export async function syncStateToRemote(client: SupabaseClient, state: AppState): Promise<boolean> {
+export async function syncStateToRemote(
+  client: SupabaseClient, 
+  state: AppState, 
+  clientId: string = CLIENT_ID
+): Promise<boolean> {
   try {
+    const payload = {
+      ...state,
+      _clientId: clientId,
+      _timestamp: Date.now(),
+    };
+
     const { error } = await client
       .from('accountability_sync')
       .upsert({
         user_id: 'ryan_accountability',
-        data: state,
+        data: payload,
         updated_at: new Date().toISOString(),
       });
 
