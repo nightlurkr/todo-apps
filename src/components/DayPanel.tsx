@@ -23,7 +23,7 @@ interface Props {
   onArchiveHabit: (habitId: string) => void;
   onDeleteSession: (dateKey: string, sessionId: string) => void;
   onSaveNotes: (dateKey: string, notes: string) => void;
-  onLogManual: (mode: WorkMode) => void;
+  onLogManual: (mode: WorkMode, dateKey: string) => void;
 }
 
 const PRESET_EMOJIS = ['📖', '💧', '🏃‍♂️', '🌙', '🧘‍♂️', '💻', '🥗', '🎯', '✍️', '⚡'];
@@ -245,13 +245,13 @@ export const DayPanel: React.FC<Props> = ({
             {editable && (
               <div className="flex gap-1">
                 <button
-                  onClick={() => onLogManual('deepWork')}
+                  onClick={() => onLogManual('deepWork', dateKey)}
                   className="flex items-center gap-1 text-[10px] font-semibold text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 border border-indigo-500/25 px-2 py-1 rounded-lg"
                 >
                   <Plus className="w-3 h-3" /> Deep Work
                 </button>
                 <button
-                  onClick={() => onLogManual('college')}
+                  onClick={() => onLogManual('college', dateKey)}
                   className="flex items-center gap-1 text-[10px] font-semibold text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 border border-cyan-500/25 px-2 py-1 rounded-lg"
                 >
                   <Plus className="w-3 h-3" /> Kuliah

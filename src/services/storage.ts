@@ -5,6 +5,7 @@ import type {
   PrayerName,
   SyncedState,
   Task,
+  TaskStatus,
   WorkMode,
   WorkSession,
 } from '../types';
@@ -80,6 +81,7 @@ export function createEmptyDailyLog(date: string): DailyLog {
     customHabits: {},
     sessions: [],
     dailyNotes: '',
+    marksAt: {},
     updatedAt: new Date().toISOString(),
   };
 }
@@ -245,6 +247,7 @@ interface LegacyLog {
   customHabits?: Record<string, boolean>;
   sessions?: WorkSession[];
   dailyNotes?: string;
+  marksAt?: Record<string, string>;
   updatedAt?: string;
 }
 
@@ -284,6 +287,7 @@ function migrateLog(dateKey: string, raw: LegacyLog): DailyLog {
     customHabits: raw.customHabits || {},
     sessions,
     dailyNotes: raw.dailyNotes || '',
+    marksAt: raw.marksAt,
     updatedAt: raw.updatedAt || new Date().toISOString(),
   };
 }
@@ -306,6 +310,18 @@ interface LegacyTask {
   kind?: string;
 }
 
+/**
+ * Status v1 memakai 'submitted'/'completed', v2 memakai 'done'. Fungsi ini
+ * menerima keduanya. Sebelumnya 'done' jatuh ke cabang terakhir dan berubah
+ * jadi 'todo' tiap kali state dimuat ulang, jadi tugas yang sudah dicentang
+ * muncul lagi sebagai belum dikerjakan setiap refresh.
+ */
+function normalizeStatus(raw: string | undefined): TaskStatus {
+  if (raw === 'done' || raw === 'submitted' || raw === 'completed') return 'done';
+  if (raw === 'in_progress') return 'in_progress';
+  return 'todo';
+}
+
 function migrateCollegeTask(raw: LegacyTask): Task {
   return {
     id: raw.id,
@@ -314,7 +330,7 @@ function migrateCollegeTask(raw: LegacyTask): Task {
     description: raw.description,
     course: raw.course,
     dueDate: raw.dueDate,
-    status: raw.status === 'submitted' ? 'done' : raw.status === 'in_progress' ? 'in_progress' : 'todo',
+    status: normalizeStatus(raw.status),
     subtasks: raw.subtasks || [],
     notes: raw.notes,
     createdAt: raw.createdAt || new Date().toISOString(),
@@ -330,7 +346,12 @@ function migrateProject(raw: LegacyTask): Task {
     description: raw.description,
     course: raw.category,
     dueDate: raw.targetDate || undefined,
-    status: raw.status === 'completed' ? 'done' : raw.status === 'on_hold' ? 'todo' : 'in_progress',
+    status:
+      raw.status === 'completed' || raw.status === 'done'
+        ? 'done'
+        : raw.status === 'on_hold' || raw.status === 'todo'
+        ? 'todo'
+        : 'in_progress',
     subtasks: raw.tasks || raw.subtasks || [],
     notes: raw.notes,
     createdAt: raw.createdAt || new Date().toISOString(),
@@ -422,6 +443,20 @@ export function saveLocalState(state: AppState): void {
  * sebabnya centang bisa balik lagi beberapa ratus milidetik kemudian.
  * ------------------------------------------------------------------ */
 
+/**
+ * Kapan satu centang terakhir diubah di log ini.
+ * Kalau log sudah punya marksAt, kunci yang tidak tercatat berarti centang itu
+ * tidak pernah disentuh di sini, jadi nilainya 0 dan tidak boleh menang.
+ * Log lama dari versi sebelumnya belum punya marksAt sama sekali, dan untuk itu
+ * satu-satunya petunjuk yang kita punya adalah updatedAt sehari penuh.
+ */
+function markTime(log: DailyLog, key: string): number {
+  if (log.marksAt) {
+    return log.marksAt[key] ? new Date(log.marksAt[key]).getTime() : 0;
+  }
+  return new Date(log.updatedAt || 0).getTime();
+}
+
 function mergeLogs(local: DailyLog | undefined, remote: DailyLog | undefined): DailyLog | undefined {
   if (!local) return remote;
   if (!remote) return local;
@@ -433,13 +468,37 @@ function mergeLogs(local: DailyLog | undefined, remote: DailyLog | undefined): D
   for (const s of remote.sessions || []) byId.set(s.id, s);
   const sessions = [...byId.values()].sort((a, b) => a.at.localeCompare(b.at));
 
+  // Centang digabung per kunci, bukan per hari. Dulu seluruh hari diambil dari
+  // perangkat yang updatedAt-nya paling baru, jadi sholat yang dicentang di PC
+  // ikut terhapus begitu HP menyentuh hari yang sama.
+  const prayers = { ...local.prayers };
+  const marksAt: Record<string, string> = { ...(local.marksAt || {}) };
+  for (const key of Object.keys(remote.prayers || {}) as PrayerName[]) {
+    if (markTime(remote, key) > markTime(local, key)) {
+      prayers[key] = remote.prayers[key];
+      if (remote.marksAt?.[key]) marksAt[key] = remote.marksAt[key];
+    }
+  }
+
+  const customHabits = { ...(local.customHabits || {}) };
+  for (const key of Object.keys(remote.customHabits || {})) {
+    if (markTime(remote, key) > markTime(local, key)) {
+      customHabits[key] = remote.customHabits[key];
+      if (remote.marksAt?.[key]) marksAt[key] = remote.marksAt[key];
+    }
+  }
+
   const remoteNewer =
     new Date(remote.updatedAt || 0).getTime() > new Date(local.updatedAt || 0).getTime();
-  const winner = remoteNewer ? remote : local;
 
   return {
-    ...winner,
+    date: local.date || remote.date,
+    prayers,
+    customHabits,
     sessions,
+    marksAt,
+    // Catatan harian satu blok teks, jadi tetap yang terbaru yang menang.
+    dailyNotes: remoteNewer ? remote.dailyNotes : local.dailyNotes,
     updatedAt: remoteNewer ? remote.updatedAt : local.updatedAt,
   };
 }

@@ -1,23 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Zap, GraduationCap } from 'lucide-react';
 import type { WorkMode } from '../types';
+import { formatDateShort } from '../services/storage';
 
 export interface SessionDraft {
   mode: WorkMode;
   source: 'timer' | 'manual';
+  /** Tanggal tujuan sesi ini, bukan selalu hari ini. */
+  dateKey: string;
   /** Terisi kalau datang dari timer; dari input manual dibiarkan kosong. */
   minutes?: number;
 }
 
 interface Props {
   draft: SessionDraft;
+  todayKey: string;
   onCancel: () => void;
   onConfirm: (minutes: number, note: string) => void;
 }
 
 const PRESET_MINUTES = [15, 25, 30, 45, 50, 60, 100];
 
-export const SessionNoteModal: React.FC<Props> = ({ draft, onCancel, onConfirm }) => {
+export const SessionNoteModal: React.FC<Props> = ({ draft, todayKey, onCancel, onConfirm }) => {
   const fromTimer = draft.source === 'timer';
   const [minutes, setMinutes] = useState<number>(draft.minutes ?? 25);
   const [note, setNote] = useState('');
@@ -53,6 +57,15 @@ export const SessionNoteModal: React.FC<Props> = ({ draft, onCancel, onConfirm }
               </h3>
               <p className="text-[11px] text-slate-400">
                 {fromTimer ? 'Sesi timer selesai' : 'Catat waktu di luar timer'}
+                {draft.dateKey !== todayKey && (
+                  <>
+                    {' '}
+                    &middot;{' '}
+                    <span className="text-amber-400 font-semibold">
+                      untuk {formatDateShort(draft.dateKey)}
+                    </span>
+                  </>
+                )}
               </p>
             </div>
           </div>

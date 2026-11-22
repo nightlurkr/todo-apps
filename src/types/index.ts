@@ -27,6 +27,12 @@ export interface DailyLog {
   customHabits: Record<string, boolean>; // habitId -> boolean
   sessions: WorkSession[];
   dailyNotes?: string;
+  /**
+   * Kapan tiap centang sholat/habit terakhir diubah, per kunci.
+   * Tanpa ini, satu hari hanya punya satu timestamp, jadi perangkat yang
+   * menyentuh hari itu paling akhir akan menghapus centang dari perangkat lain.
+   */
+  marksAt?: Record<string, string>;
   updatedAt: string;
 }
 

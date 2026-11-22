@@ -9,6 +9,7 @@ import {
   createInitialState,
   getDayStats,
   mergeState,
+  migrateState,
   activeHabitsOn,
 } from './storage';
 
@@ -102,5 +103,50 @@ export function runSelfCheck() {
   pass = assert(activeHabitsOn(habits, D).length === 1, 'arsip habit mengubah riwayat lampau') && pass;
   pass = assert(activeHabitsOn(habits, '2026-03-01').length === 0, 'habit terarsip masih dihitung') && pass;
 
-  console[pass ? 'info' : 'error'](pass ? '✅ selfcheck storage lolos (6 kasus)' : '❌ selfcheck storage ADA YANG GAGAL');
+  /* 7. Tugas yang sudah selesai tidak boleh balik jadi 'todo' saat dimuat ulang. */
+  const reloaded = migrateState({
+    version: 2,
+    tasks: [
+      { id: 'tx', kind: 'college', title: 'Sudah dikerjakan', status: 'done', subtasks: [],
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+    ],
+  });
+  pass = assert(reloaded.tasks[0].status === 'done', 'status selesai hilang saat state dimuat ulang') && pass;
+
+  /* 8. Centang dari dua perangkat di hari yang sama harus sama-sama bertahan. */
+  const pc: AppState = {
+    ...base,
+    dailyLogs: {
+      [D]: logWith(D, {
+        prayers: { subuh: true, dzuhur: false, ashar: false, maghrib: false, isya: false },
+        marksAt: { subuh: '2026-01-01T06:00:00.000Z' },
+        updatedAt: '2026-01-01T06:00:00.000Z',
+      }),
+    },
+  };
+  const hp = {
+    dailyLogs: {
+      [D]: logWith(D, {
+        prayers: { subuh: false, dzuhur: true, ashar: false, maghrib: false, isya: false },
+        marksAt: { dzuhur: '2026-01-01T12:00:00.000Z' },
+        updatedAt: '2026-01-01T12:00:00.000Z',
+      }),
+    },
+  };
+  const bothDevices = mergeState(pc, hp).dailyLogs[D].prayers;
+  pass = assert(bothDevices.subuh && bothDevices.dzuhur, 'centang perangkat lain hilang saat digabung') && pass;
+
+  /* 9. Mencentang ulang tetap bisa membatalkan, bukan sekadar digabung. */
+  const unchecked = {
+    dailyLogs: {
+      [D]: logWith(D, {
+        prayers: { subuh: false, dzuhur: false, ashar: false, maghrib: false, isya: false },
+        marksAt: { subuh: '2026-01-01T07:00:00.000Z' },
+        updatedAt: '2026-01-01T07:00:00.000Z',
+      }),
+    },
+  };
+  pass = assert(!mergeState(pc, unchecked).dailyLogs[D].prayers.subuh, 'batal centang tidak ikut tersinkron') && pass;
+
+  console[pass ? 'info' : 'error'](pass ? '✅ selfcheck storage lolos (9 kasus)' : '❌ selfcheck storage ADA YANG GAGAL');
 }

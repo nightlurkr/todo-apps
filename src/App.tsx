@@ -36,6 +36,12 @@ export const App: React.FC = () => {
   const [timerMode, setTimerMode] = useState<WorkMode>('deepWork');
   const [sessionDraft, setSessionDraft] = useState<SessionDraft | null>(null);
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error' | 'offline'>('idle');
+  /**
+   * Baru true setelah kita benar-benar tahu isi baris di cloud. Selama masih
+   * false, perangkat ini tidak boleh mengunggah apa pun: itulah yang dulu
+   * membuat HP menimpa data PC ketika fetch pertamanya gagal.
+   */
+  const [remoteReady, setRemoteReady] = useState(false);
 
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isInitialLoadRef = useRef(true);
@@ -79,31 +85,56 @@ export const App: React.FC = () => {
     const client = getSupabaseClient(supabaseUrl, supabaseAnonKey);
     if (!client) {
       setSyncStatus('offline');
+      setRemoteReady(false);
       return;
     }
 
     let cancelled = false;
+    let attempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     setSyncStatus('syncing');
 
-    fetchRemoteState(client)
-      .then(async (remote) => {
-        if (cancelled) return;
-        if (remote) {
-          applyRemote(remote);
-          setSyncStatus('synced');
-        } else {
-          // Baris di cloud masih kosong: unggah yang ada di perangkat ini.
-          setState((prev) => {
-            void syncStateToRemote(client, prev);
-            return prev;
-          });
-          setSyncStatus('synced');
-        }
-      })
-      .catch((err) => {
-        console.error('Fetch awal gagal:', err);
-        if (!cancelled) setSyncStatus('error');
-      });
+    const pull = async () => {
+      const result = await fetchRemoteState(client);
+      if (cancelled) return;
+
+      if (result.status === 'found') {
+        applyRemote(result.data);
+        setRemoteReady(true);
+        setSyncStatus('synced');
+        return;
+      }
+
+      if (result.status === 'empty') {
+        // Baris memang belum ada. Aman mengunggah isi perangkat ini.
+        setRemoteReady(true);
+        setSyncStatus('synced');
+        return;
+      }
+
+      // Gagal menghubungi cloud. Jangan unggah apa pun, cukup coba lagi.
+      attempt += 1;
+      if (attempt < 4) {
+        retryTimer = setTimeout(pull, attempt * 2000);
+      } else {
+        setSyncStatus('error');
+      }
+    };
+
+    void pull();
+
+    /*
+     * HP jarang dimuat ulang, biasanya cuma dibangunkan dari background.
+     * Kalau koneksi realtime sempat putus selagi layar mati, state di sini
+     * jadi basi, dan dorongan berikutnya akan menimpa data cloud yang lebih
+     * baru. Jadi setiap kali halaman kembali terlihat, tarik dulu.
+     */
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      attempt = 0;
+      void pull();
+    };
+    document.addEventListener('visibilitychange', onVisible);
 
     const channel = client
       .channel('public:accountability_sync')
@@ -115,6 +146,7 @@ export const App: React.FC = () => {
           if (!data) return;
           if (data._clientId === CLIENT_ID) return; // siaran dari tab ini sendiri
           applyRemote(data);
+          setRemoteReady(true);
           setSyncStatus('synced');
         }
       )
@@ -122,23 +154,30 @@ export const App: React.FC = () => {
 
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      document.removeEventListener('visibilitychange', onVisible);
       client.removeChannel(channel);
     };
   }, [supabaseUrl, supabaseAnonKey, applyRemote]);
 
-  /* 3. Simpan lokal + dorong ke cloud (debounce) */
+  /* 3a. Simpan lokal selalu, baik ada cloud maupun tidak */
   useEffect(() => {
     if (isInitialLoadRef.current) {
       isInitialLoadRef.current = false;
       return;
     }
     saveLocalState(state);
+  }, [state]);
 
+  /* 3b. Dorong ke cloud, hanya setelah isi cloud diketahui */
+  useEffect(() => {
     const client = getSupabaseClient(supabaseUrl, supabaseAnonKey);
     if (!client) {
       setSyncStatus('offline');
       return;
     }
+    if (!remoteReady) return;
+
     setSyncStatus('syncing');
     if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
     syncTimerRef.current = setTimeout(async () => {
@@ -149,7 +188,7 @@ export const App: React.FC = () => {
     return () => {
       if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
     };
-  }, [state, supabaseUrl, supabaseAnonKey]);
+  }, [state, remoteReady, supabaseUrl, supabaseAnonKey]);
 
   /* 4. Pergantian hari (00:00 WIB) saat app dibiarkan terbuka */
   useEffect(() => {
@@ -194,6 +233,7 @@ export const App: React.FC = () => {
       updateLog(dateKey, (log) => ({
         ...log,
         prayers: { ...log.prayers, [prayer]: !log.prayers[prayer] },
+        marksAt: { ...(log.marksAt || {}), [prayer]: new Date().toISOString() },
       }));
     },
     [updateLog]
@@ -204,6 +244,7 @@ export const App: React.FC = () => {
       updateLog(dateKey, (log) => ({
         ...log,
         customHabits: { ...log.customHabits, [habitId]: !log.customHabits?.[habitId] },
+        marksAt: { ...(log.marksAt || {}), [habitId]: new Date().toISOString() },
       }));
     },
     [updateLog]
@@ -291,7 +332,7 @@ export const App: React.FC = () => {
   const handleConfirmSession = useCallback(
     (minutes: number, note: string) => {
       if (!sessionDraft) return;
-      handleAddSession(todayKey, {
+      handleAddSession(sessionDraft.dateKey, {
         mode: sessionDraft.mode,
         minutes,
         note,
@@ -299,7 +340,7 @@ export const App: React.FC = () => {
       });
       setSessionDraft(null);
     },
-    [sessionDraft, handleAddSession, todayKey]
+    [sessionDraft, handleAddSession]
   );
 
   const handleQuickStart = useCallback((mode: WorkMode) => {
@@ -339,12 +380,13 @@ export const App: React.FC = () => {
     const client = getSupabaseClient(supabaseUrl, supabaseAnonKey);
     if (!client) return false;
     setSyncStatus('syncing');
-    const remote = await fetchRemoteState(client);
-    if (!remote) {
-      setSyncStatus('error');
+    const result = await fetchRemoteState(client);
+    if (result.status !== 'found') {
+      setSyncStatus(result.status === 'empty' ? 'synced' : 'error');
       return false;
     }
-    applyRemote(remote);
+    applyRemote(result.data);
+    setRemoteReady(true);
     setSyncStatus('synced');
     return true;
   }, [supabaseUrl, supabaseAnonKey, applyRemote]);
@@ -356,9 +398,19 @@ export const App: React.FC = () => {
       return;
     }
     setSyncStatus('syncing');
-    const remote = await fetchRemoteState(client);
-    applyRemote(remote);
-    const ok = await syncStateToRemote(client, mergeState(state, remote));
+    const result = await fetchRemoteState(client);
+
+    if (result.status === 'error') {
+      setSyncStatus('error');
+      alert('Gagal menghubungi cloud. Data di perangkat ini aman dan belum diunggah, coba lagi saat sinyal membaik.');
+      return;
+    }
+
+    const merged = result.status === 'found' ? mergeState(state, result.data) : state;
+    if (result.status === 'found') applyRemote(result.data);
+    setRemoteReady(true);
+
+    const ok = await syncStateToRemote(client, merged);
     setSyncStatus(ok ? 'synced' : 'error');
   }, [state, supabaseUrl, supabaseAnonKey, applyRemote]);
 
@@ -410,7 +462,9 @@ export const App: React.FC = () => {
             onDeleteSession={handleDeleteSession}
             onSaveNotes={handleSaveNotes}
             onQuickStart={handleQuickStart}
-            onLogManual={(mode) => openSessionModal({ mode, source: 'manual' })}
+            onLogManual={(mode, dateKey) =>
+              openSessionModal({ mode, source: 'manual', dateKey })
+            }
             onOpenTasks={() => setActiveTab('tasks')}
             onSetChallengeStart={handleSetChallengeStart}
           />
@@ -425,7 +479,7 @@ export const App: React.FC = () => {
             mode={timerMode}
             onChangeMode={setTimerMode}
             onSessionFinished={(mode, minutes) =>
-              openSessionModal({ mode, source: 'timer', minutes })
+              openSessionModal({ mode, source: 'timer', minutes, dateKey: todayKey })
             }
             log={todayLog}
             deepWorkTarget={state.settings.deepWorkDailyTarget || 100}
@@ -437,6 +491,7 @@ export const App: React.FC = () => {
       {sessionDraft && (
         <SessionNoteModal
           draft={sessionDraft}
+          todayKey={todayKey}
           onCancel={() => setSessionDraft(null)}
           onConfirm={handleConfirmSession}
         />

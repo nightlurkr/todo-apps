@@ -39,7 +39,7 @@ interface Props {
   onDeleteSession: (dateKey: string, sessionId: string) => void;
   onSaveNotes: (dateKey: string, notes: string) => void;
   onQuickStart: (mode: WorkMode) => void;
-  onLogManual: (mode: WorkMode) => void;
+  onLogManual: (mode: WorkMode, dateKey: string) => void;
   onOpenTasks: () => void;
   onSetChallengeStart: (dateKey: string) => void;
 }
@@ -340,7 +340,7 @@ export const DashboardOverview: React.FC<Props> = (props) => {
                   <Play className="w-3.5 h-3.5 fill-current" /> Quick Start
                 </button>
                 <button
-                  onClick={() => onLogManual(c.mode)}
+                  onClick={() => onLogManual(c.mode, todayKey)}
                   disabled={!isEditableDate(todayKey)}
                   className="flex-1 flex items-center justify-center gap-1 py-2.5 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700"
                   title="Catat waktu yang dikerjakan di luar timer"

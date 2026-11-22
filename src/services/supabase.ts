@@ -103,23 +103,35 @@ export async function testSupabaseConnection(
   }
 }
 
-export async function fetchRemoteState(client: SupabaseClient): Promise<RemotePayload | null> {
+/**
+ * Hasil pengambilan data dibedakan dengan tegas. Sebelumnya fungsi ini
+ * mengembalikan null baik saat baris memang belum ada MAUPUN saat jaringan
+ * gagal, lalu pemanggilnya menganggap cloud kosong dan mengunggah data lokal.
+ * Di HP dengan sinyal jelek itu berarti data PC di cloud tertimpa habis.
+ */
+export type FetchResult =
+  | { status: 'found'; data: RemotePayload }
+  | { status: 'empty' }
+  | { status: 'error'; message: string };
+
+export async function fetchRemoteState(client: SupabaseClient): Promise<FetchResult> {
   try {
     const { data, error } = await client
       .from('accountability_sync')
       .select('data')
       .eq('user_id', ROW_ID)
-      .single();
+      .maybeSingle();
 
     if (error) {
-      if (error.code === 'PGRST116') return null; // baris belum ada
       console.warn('Gagal mengambil data dari Supabase:', error);
-      return null;
+      return { status: 'error', message: error.message };
     }
-    return (data?.data as RemotePayload) || null;
+    if (!data?.data) return { status: 'empty' };
+    return { status: 'found', data: data.data as RemotePayload };
   } catch (err) {
-    console.error('Remote fetch error:', err);
-    return null;
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('Remote fetch error:', message);
+    return { status: 'error', message };
   }
 }
 
